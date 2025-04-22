@@ -2,17 +2,10 @@ name: Update Homebrew Formula
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g., v3.1.0-preview.2 or v3.0.2)'
-        required: true
-      formula:
-        description: 'Formula file to update (e.g., dsc-cli.rb or dsc-cli-preview.rb)'
-        required: true
 
 jobs:
   update-formula:
-    name: Update Formula and Create Pull Request
+    name: Update Homebrew Formula
     runs-on: ubuntu-latest
     env:
       CLI_REPO: PowerShell/DSC
@@ -21,79 +14,70 @@ jobs:
       - name: Checkout Homebrew Tap Repo
         uses: actions/checkout@v4
 
-      - name: Fetch Release Info
+      - name: Get Latest Release Info
         id: get_release
         run: |
-          TAG=${{ github.event.inputs.tag }}
-          VERSION=${TAG#v}  # Remove 'v' prefix
+          latest_release=$(curl -s "https://api.github.com/repos/${CLI_REPO}/releases/latest")
+          echo "RELEASE_JSON=$latest_release" >> $GITHUB_ENV
+          echo "TAG_NAME=$(echo "$latest_release" | jq -r '.tag_name')" >> $GITHUB_ENV
+
+      - name: Determine if Release is Preview or Stable
+        id: determine_formula
+        run: |
+          if [[ "${{ env.TAG_NAME }}" == *preview* ]]; then
+            echo "FORMULA=dsc-cli-preview.rb" >> $GITHUB_ENV
+          else
+            echo "FORMULA=dsc-cli.rb" >> $GITHUB_ENV
+          fi
+
+      - name: Download Release Assets and Calculate SHA256
+        id: calculate_sha
+        run: |
+          # Extract version without 'v'
+          VERSION=${TAG_NAME#v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-          # Get URLs and SHA256 for both ARM and x86
-          ARM_ASSET="DSC-${VERSION}-aarch64-apple-darwin.tar.gz"
-          X86_ASSET="DSC-${VERSION}-x86_64-apple-darwin.tar.gz"
+          # Download both architecture files
+          curl -L -o arm.tar.gz "https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz"
+          curl -L -o x86.tar.gz "https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-x86_64-apple-darwin.tar.gz"
 
-          ARM_URL="https://github.com/${{ env.CLI_REPO }}/releases/download/${TAG}/${ARM_ASSET}"
-          X86_URL="https://github.com/${{ env.CLI_REPO }}/releases/download/${TAG}/${X86_ASSET}"
+          # Calculate SHA256
+          ARM_SHA=$(sha256sum arm.tar.gz | awk '{ print $1 }')
+          X86_SHA=$(sha256sum x86.tar.gz | awk '{ print $1 }')
 
-          curl -LO "$ARM_URL"
-          curl -LO "$X86_URL"
-
-          ARM_SHA=$(sha256sum "${ARM_ASSET}" | awk '{print $1}')
-          X86_SHA=$(sha256sum "${X86_ASSET}" | awk '{print $1}')
-
-          echo "ARM_URL=$ARM_URL" >> $GITHUB_ENV
-          echo "X86_URL=$X86_URL" >> $GITHUB_ENV
           echo "ARM_SHA=$ARM_SHA" >> $GITHUB_ENV
           echo "X86_SHA=$X86_SHA" >> $GITHUB_ENV
 
-      - name: Update Formula
-        id: update_formula
+      - name: Update Formula File
         run: |
-          FORMULA_PATH="./Formula/${{ github.event.inputs.formula }}"
-          echo "Updating $FORMULA_PATH"
+          FORMULA_PATH="./Formula/${FORMULA}"
 
-          # Replace version
+          # Update version
           sed -i "s/^  version \".*\"/  version \"${VERSION}\"/" "$FORMULA_PATH"
 
-          # Replace ARM section
-          sed -i "/if Hardware::CPU.arm\?/,+2s|url \".*\"|url \"${ARM_URL}\"|" "$FORMULA_PATH"
-          sed -i "/if Hardware::CPU.arm\?/,+2s|sha256 \".*\"|sha256 \"${ARM_SHA}\"|" "$FORMULA_PATH"
+          # Update ARM url and sha256
+          sed -i "/aarch64-apple-darwin/ s|url \".*\"|url \"https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz\"|" "$FORMULA_PATH"
+          sed -i "/aarch64-apple-darwin/,+1 s/sha256 \".*\"/sha256 \"${ARM_SHA}\"/" "$FORMULA_PATH"
 
-          # Replace x86 section
-          sed -i "/else/,/end/s|url \".*\"|url \"${X86_URL}\"|" "$FORMULA_PATH"
-          sed -i "/else/,/end/s|sha256 \".*\"|sha256 \"${X86_SHA}\"|" "$FORMULA_PATH"
+          # Update x86 url and sha256
+          sed -i "/x86_64-apple-darwin/ s|url \".*\"|url \"https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-x86_64-apple-darwin.tar.gz\"|" "$FORMULA_PATH"
+          sed -i "/x86_64-apple-darwin/,+1 s/sha256 \".*\"/sha256 \"${X86_SHA}\"/" "$FORMULA_PATH"
 
-      - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@master
-
-      - name: Test Formula Locally
+      - name: Test Formula Locally (only on macOS)
+        if: runner.os == 'macOS'
         run: |
-          brew install --build-from-source "./Formula/${{ github.event.inputs.formula }}"
-          brew test "./Formula/${{ github.event.inputs.formula }}"
+          brew install --build-from-source "./Formula/${FORMULA}"
+          brew test "./Formula/${FORMULA}"
 
-      - name: Create Branch
-        id: create_branch
-        run: |
-          BRANCH_NAME="update-${{ github.event.inputs.formula }}-${{ github.event.inputs.tag }}"
-          git checkout -b "$BRANCH_NAME"
-          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
-
-      - name: Commit Changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/
-          git commit -m "Update ${{ github.event.inputs.formula }} to ${{ github.event.inputs.tag }}"
-          git push origin "$BRANCH_NAME"
+      - name: Info if not on macOS
+        if: runner.os != 'macOS'
+        run: echo "Skipping brew install because runner is not macOS."
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
-          title: "Update ${{ github.event.inputs.formula }} to ${{ github.event.inputs.tag }}"
-          body: "Automated update of the formula to version ${{ github.event.inputs.tag }}."
-          head: ${{ env.BRANCH_NAME }}
-          base: main
-          labels: |
-            automated
-            homebrew
-          branch-suffix: short-commit-hash
+          commit-message: "Update ${{ env.FORMULA }} to ${{ env.VERSION }}"
+          branch: "update-${{ env.FORMULA }}-${{ env.VERSION }}"
+          title: "Update ${{ env.FORMULA }} to ${{ env.VERSION }}"
+          body: |
+            Automated update for ${{ env.FORMULA }} to ${{ env.VERSION }}.
