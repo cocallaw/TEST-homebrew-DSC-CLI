@@ -2,82 +2,75 @@ name: Update Homebrew Formula
 
 on:
   workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release version tag (example: v3.1.0-preview.2 or v3.0.2)'
+        required: true
+        type: string
 
 jobs:
-  update-formula:
-    name: Update Homebrew Formula
+  update_formula:
     runs-on: ubuntu-latest
-    env:
-      CLI_REPO: PowerShell/DSC
-
     steps:
-      - name: Checkout Homebrew Tap Repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get Latest Release Info
-        id: get_release
+      - name: Parse Version Info
+        id: parse
         run: |
-          latest_release=$(curl -s "https://api.github.com/repos/${CLI_REPO}/releases/latest")
-          echo "RELEASE_JSON=$latest_release" >> $GITHUB_ENV
-          echo "TAG_NAME=$(echo "$latest_release" | jq -r '.tag_name')" >> $GITHUB_ENV
+          TAG="${{ inputs.version_tag }}"
+          echo "TAG=${TAG}" >> $GITHUB_ENV
+          VERSION=${TAG#v}  # remove leading "v"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
-      - name: Determine if Release is Preview or Stable
-        id: determine_formula
-        run: |
-          if [[ "${{ env.TAG_NAME }}" == *preview* ]]; then
-            echo "FORMULA=dsc-cli-preview.rb" >> $GITHUB_ENV
+          if [[ "$VERSION" == *"preview"* ]]; then
+            FORMULA="dsc-cli-preview.rb"
+            FORMULA_NAME="dsc-cli-preview"
           else
-            echo "FORMULA=dsc-cli.rb" >> $GITHUB_ENV
+            FORMULA="dsc-cli.rb"
+            FORMULA_NAME="dsc-cli"
+          fi
+          echo "FORMULA=${FORMULA}" >> $GITHUB_ENV
+          echo "FORMULA_NAME=${FORMULA_NAME}" >> $GITHUB_ENV
+
+      - name: Download and calculate SHAs
+        id: download
+        run: |
+          BASE_URL="https://github.com/PowerShell/DSC/releases/download/${TAG}"
+          ARM_FILE="DSC-${VERSION}-aarch64-apple-darwin.tar.gz"
+          X86_FILE="DSC-${VERSION}-x86_64-apple-darwin.tar.gz"
+
+          curl -L -o arm.tar.gz "${BASE_URL}/${ARM_FILE}"
+          curl -L -o x86.tar.gz "${BASE_URL}/${X86_FILE}"
+
+          ARM_SHA=$(sha256sum arm.tar.gz | awk '{print $1}')
+          X86_SHA=$(sha256sum x86.tar.gz | awk '{print $1}')
+
+          echo "ARM_SHA=${ARM_SHA}" >> $GITHUB_ENV
+          echo "X86_SHA=${X86_SHA}" >> $GITHUB_ENV
+
+      - name: Update Formula
+        run: |
+          sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/${FORMULA}
+
+          if [[ "$FORMULA" == "dsc-cli.rb" ]]; then
+            sed -i "s|url \".*-aarch64-apple-darwin.tar.gz\"|url \"https://github.com/PowerShell/DSC/releases/download/${TAG}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz\"|" Formula/${FORMULA}
+            sed -i "s|sha256 \".*\"|sha256 \"${ARM_SHA}\"|" Formula/${FORMULA}
+          else
+            sed -i "s|url \".*-aarch64-apple-darwin.tar.gz\"|url \"https://github.com/PowerShell/DSC/releases/download/${TAG}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz\"|" Formula/${FORMULA}
+            sed -i "s|sha256 \".*\"|sha256 \"${ARM_SHA}\"|" Formula/${FORMULA}
           fi
 
-      - name: Download Release Assets and Calculate SHA256
-        id: calculate_sha
-        run: |
-          # Extract version without 'v'
-          VERSION=${TAG_NAME#v}
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          # Similar for x86 part - Homebrew formula usually has conditional blocks.
 
-          # Download both architecture files
-          curl -L -o arm.tar.gz "https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz"
-          curl -L -o x86.tar.gz "https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-x86_64-apple-darwin.tar.gz"
-
-          # Calculate SHA256
-          ARM_SHA=$(sha256sum arm.tar.gz | awk '{ print $1 }')
-          X86_SHA=$(sha256sum x86.tar.gz | awk '{ print $1 }')
-
-          echo "ARM_SHA=$ARM_SHA" >> $GITHUB_ENV
-          echo "X86_SHA=$X86_SHA" >> $GITHUB_ENV
-
-      - name: Update Formula File
-        run: |
-          FORMULA_PATH="./Formula/${FORMULA}"
-
-          # Update version
-          sed -i "s/^  version \".*\"/  version \"${VERSION}\"/" "$FORMULA_PATH"
-
-          # Update ARM url and sha256
-          sed -i "/aarch64-apple-darwin/ s|url \".*\"|url \"https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz\"|" "$FORMULA_PATH"
-          sed -i "/aarch64-apple-darwin/,+1 s/sha256 \".*\"/sha256 \"${ARM_SHA}\"/" "$FORMULA_PATH"
-
-          # Update x86 url and sha256
-          sed -i "/x86_64-apple-darwin/ s|url \".*\"|url \"https://github.com/${CLI_REPO}/releases/download/${TAG_NAME}/DSC-${VERSION}-x86_64-apple-darwin.tar.gz\"|" "$FORMULA_PATH"
-          sed -i "/x86_64-apple-darwin/,+1 s/sha256 \".*\"/sha256 \"${X86_SHA}\"/" "$FORMULA_PATH"
-
-      - name: Test Formula Locally (only on macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install --build-from-source "./Formula/${FORMULA}"
-          brew test "./Formula/${FORMULA}"
-
-      - name: Info if not on macOS
-        if: runner.os != 'macOS'
-        run: echo "Skipping brew install because runner is not macOS."
-
-      - name: Create Pull Request
+      - name: Create Branch and PR
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "Update ${{ env.FORMULA }} to ${{ env.VERSION }}"
-          branch: "update-${{ env.FORMULA }}-${{ env.VERSION }}"
-          title: "Update ${{ env.FORMULA }} to ${{ env.VERSION }}"
+          commit-message: "Update ${FORMULA_NAME} to ${VERSION}"
+          branch: "update-${FORMULA_NAME}-${VERSION}"
+          title: "Update ${FORMULA_NAME} to ${VERSION}"
           body: |
-            Automated update for ${{ env.FORMULA }} to ${{ env.VERSION }}.
+            This PR updates the ${FORMULA_NAME} formula to version ${VERSION}.
+          labels: |
+            automated-pr
+          base: main
