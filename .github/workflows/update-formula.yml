@@ -70,8 +70,6 @@ jobs:
             sed -i "s|sha256 \".*\"|sha256 \"${ARM_SHA}\"|" Formula/${FORMULA}
           fi
 
-          # Similar for x86 part - Homebrew formula usually has conditional blocks.
-
       - name: Create Branch and PR
         uses: peter-evans/create-pull-request@v6
         with:
