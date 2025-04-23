@@ -60,15 +60,18 @@ jobs:
 
       - name: Update Formula
         run: |
-          sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/${FORMULA}
+            FORMULA_PATH="Formula/${FORMULA}"
 
-          if [[ "$FORMULA" == "dsc-cli.rb" ]]; then
-            sed -i "s|url \".*-aarch64-apple-darwin.tar.gz\"|url \"https://github.com/PowerShell/DSC/releases/download/${TAG}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz\"|" Formula/${FORMULA}
-            sed -i "s|sha256 \".*\"|sha256 \"${ARM_SHA}\"|" Formula/${FORMULA}
-          else
-            sed -i "s|url \".*-aarch64-apple-darwin.tar.gz\"|url \"https://github.com/PowerShell/DSC/releases/download/${TAG}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz\"|" Formula/${FORMULA}
-            sed -i "s|sha256 \".*\"|sha256 \"${ARM_SHA}\"|" Formula/${FORMULA}
-          fi
+            # Update version
+            sed -i "s|version \".*\"|version \"${VERSION}\"|" $FORMULA_PATH
+
+            # Update ARM URL and SHA
+            sed -i "s|url \".*-aarch64-apple-darwin.tar.gz\"|url \"https://github.com/PowerShell/DSC/releases/download/${TAG}/DSC-${VERSION}-aarch64-apple-darwin.tar.gz\"|" $FORMULA_PATH
+            sed -i "/aarch64-apple-darwin.tar.gz/{n;s|sha256 \".*\"|sha256 \"${ARM_SHA}\"|}" $FORMULA_PATH
+
+            # Update x86_64 URL and SHA
+            sed -i "s|url \".*-x86_64-apple-darwin.tar.gz\"|url \"https://github.com/PowerShell/DSC/releases/download/${TAG}/DSC-${VERSION}-x86_64-apple-darwin.tar.gz\"|" $FORMULA_PATH
+            sed -i "/x86_64-apple-darwin.tar.gz/{n;s|sha256 \".*\"|sha256 \"${X86_SHA}\"|}" $FORMULA_PATH
 
       - name: Create Branch and PR
         uses: peter-evans/create-pull-request@v6
