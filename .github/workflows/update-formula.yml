@@ -53,6 +53,11 @@ jobs:
           echo "ARM_SHA=${ARM_SHA}" >> $GITHUB_ENV
           echo "X86_SHA=${X86_SHA}" >> $GITHUB_ENV
 
+      - name: Clean up downloaded files
+        run: |
+            rm -f ./arm.tar.gz
+            rm -f ./x86.tar.gz
+
       - name: Update Formula
         run: |
           sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/${FORMULA}
@@ -70,11 +75,11 @@ jobs:
       - name: Create Branch and PR
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "Update ${FORMULA_NAME} to ${VERSION}"
-          branch: "update-${FORMULA_NAME}-${VERSION}"
-          title: "Update ${FORMULA_NAME} to ${VERSION}"
+          commit-message: "Update ${{ env.FORMULA_NAME }} to ${{ env.VERSION }}"
+          branch: update-${{ env.FORMULA_NAME }}-${{ env.VERSION }}
+          title: "Update ${{ env.FORMULA_NAME }} to ${{ env.VERSION }}"
           body: |
-            This PR updates the ${FORMULA_NAME} formula to version ${VERSION}.
+            This PR updates the `${{ env.FORMULA_NAME }}` formula to version `${{ env.VERSION }}`.
           labels: |
             automated-pr
           base: main
